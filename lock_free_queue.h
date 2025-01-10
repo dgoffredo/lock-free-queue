@@ -83,6 +83,8 @@ public:
             Node *old_free_list = free_list.load();
             old_front->free_list_next = old_free_list;
         } while (!free_list.compare_exchange_weak(old_free_list, old_front));
+        
+        back.compare_exchange_strong(old_front, nullptr);
 
         return result;
     }
