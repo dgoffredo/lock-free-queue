@@ -2,6 +2,9 @@
 #include <atomic>
 #include <optional>
 
+#include <iomanip> // TODO: no
+#include <iostream> // TODO: no
+
 // TODO: This implementation does not provide any exception guarantees.
 // It could be modified to provide the strong exception guarantee, but I
 // haven't yet bothered.
@@ -16,8 +19,7 @@ private:
         };
         std::atomic<Node*> queue_next;
 
-        Node()
-        : queue_next(nullptr) {}
+        Node() {}
 
         ~Node() {}
     };
@@ -35,15 +37,19 @@ public:
         Node *next;
 
         // Delete nodes in the queue.
-        for (Node *node = front.load(); node; node = next) {
-            next = node->queue_next.load();
+        for (Node *node = front.load(std::memory_order_relaxed); node; node = next) {
+            std::cout << "queue node has value: " << node->value << '\n';
+            next = node->queue_next.load(std::memory_order_relaxed);
+            std::cout << "queue node->queue_next is: " << std::hex << static_cast<const void*>(next) << '\n';
             node->value.~T();
             delete node;
         }
 
         // Delete nodes in the free list.
         for (Node *node = free_list; node; node = next) {
+            std::cout << "free list node is: " << std::hex << static_cast<const void*>(node) << '\n';
             next = node->free_list_next;
+            std::cout << "free list next is: " << std::hex << static_cast<const void*>(next) << '\n';
             delete node;
         }
     }
@@ -52,14 +58,20 @@ public:
     void push_back(Value&& value) {
         // Get a node from the free list, or otherwise allocate a new node.
         Node *node;
+        Node *new_free_list;
         do {
             node = free_list.load();
-        } while (node && !free_list.compare_exchange_weak(node, node->free_list_next));
+            if (!node) {
+                break;
+            }
+            new_free_list = node->free_list_next;
+        } while (!free_list.compare_exchange_weak(node, new_free_list));
         if (!node) {
             node = new Node;
         }
 
         new (&node->value) T(std::forward<Value>(value));
+        node->queue_next.store(nullptr, std::memory_order_relaxed);
 
         push_back_node(node); // the real guts of the implementation
     }
@@ -106,10 +118,10 @@ private:
             if (!old_back) {
                 // We're pushing onto an empty queue, so then `front` will be
                 // null, too. That is, unless another call to `push_back_node`
-                // beat us to the punch.
+                // or `push_front` beat us to the punch.
                 null = nullptr;
                 if (!front.compare_exchange_strong(null, node)) {
-                    // A concurrent call to `push_back_node` beat us to it.
+                    // A concurrent call to `push_back_node` or `push_front` beat us to it.
                     continue;
                 }   
             }
